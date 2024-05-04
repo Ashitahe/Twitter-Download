@@ -3,6 +3,7 @@ package utils
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"os"
 	"sync"
@@ -38,7 +39,7 @@ func ReadSettings() (map[string]interface{}, error) {
 	return settings, nil
 }
 
-func SaveFile(savePath string, saveFileName string, saveContent []byte) error {
+func SaveMediaFile(savePath string, saveFileName string, saveContent []byte) error {
 	fileName := saveFileName
 	dir := savePath
 
@@ -64,43 +65,26 @@ func SaveFile(savePath string, saveFileName string, saveContent []byte) error {
 	return nil
 }
 
-func ReadLog() (map[string]interface{}, error) {
-	file, err := os.Open("login.json")
+// LoadURLsFromJSON 从指定的JSON文件中读取URLs
+func LoadURLsFromJSON(filePath string) ([]string, error) {
+	// 打开文件
+	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 
-	decoder := json.NewDecoder(file)
-	settings := make(map[string]interface{})
-	err = decoder.Decode(&settings)
+	// 读取文件内容
+	bytes, err := io.ReadAll(file)
 	if err != nil {
 		return nil, err
 	}
 
-	return settings, nil
-}
-
-func SaveLog(saveContent map[string]interface{}) error {
-	file, err := os.Create("login.json")
-	if err != nil {
-		log.Println("Error creating file:", err)
-		return errors.New("error creating file")
+	// 解析JSON到字符串切片
+	var urls []string
+	if err := json.Unmarshal(bytes, &urls); err != nil {
+		return nil, err
 	}
-	defer file.Close()
 
-	encoder := json.NewEncoder(file)
-	err = encoder.Encode(saveContent)
-	if err != nil {
-		log.Println("Error saving file:", err)
-		return errors.New("error saving file")
-	}
-	return nil
-}
-
-func WriteBytesToFile(filename string, data []byte) {
-	err := os.WriteFile(filename, data, 0644)
-	if err != nil {
-			log.Fatalf("Failed to write to file: %v", err)
-	}
+	return urls, nil
 }

@@ -1,3 +1,11 @@
 {
-  "cookie": "guest_id=v1%3A170219661879408578; kdt=SN4SxrIlNrSiVcSMii6hfXUwKgugcFkDnKBQPYUU; guest_id_ads=v1%3A170219661879408578; guest_id_marketing=v1%3A170219661879408578; twid=u%3D1384849909992493060; g_state={'i_l':0}; auth_token=b913adb1181b8a2f5aac0209e53cf13ca8e50177; ct0=834618fc6b616b9358bf75422d7d176406aa034f472c6d7a71b9c67e2777ff97f2b926ffc57c32bf5412bca770ed08fd56876875876938069d02e5c09af8093a4252a87e484f69625bdfcecfba18d811; lang=en; personalization_id='v1_vA1vR9fuWPboryUxqikr2g=='"
+  "cookie": "",
+  "cookieComment": "上面cookie字段填入你的cookie，保證cookie有效，否則將無法正常使用",
+  "savePath": "D:\\Twitter\\",
+  "savePathComment": "保存路径，必须填写，否则默認保存到程序目录下的文件夹",
+  "userList": [
+    "Twitter",
+    "TwitterSupport"
+  ],
+  "userListComment": "需要爬取的用户列表"
 }

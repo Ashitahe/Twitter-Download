@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"myTwitterDownload/store"
 	"myTwitterDownload/utils"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gocolly/colly"
@@ -24,10 +26,14 @@ type userInfo struct {
 	followingCount int
 	tweetCount     int
 	nextPageToken  string
+	saveDir        string
 }
 
 var (
-	userInfoCache = &userInfo{}
+	task            sync.WaitGroup
+	userInfoCache   = &userInfo{}
+	downloadedCount int32
+	logStore        = store.NewURLStore()
 )
 
 func extractValueFromCookie(cookie string, fieldName string) string {
@@ -47,22 +53,42 @@ func createCollector() *colly.Collector {
 	return c
 }
 
-func processString(input string) string {
-	return strings.TrimSuffix(input, ":orig")
-}
-
 func downloadMedia(mediaUrls string) {
+
+	extractSuffixAfterColon := func(url string) string {
+		suffix := ""
+		lastColonIndex := strings.LastIndex(url, ":")
+
+		if !(lastColonIndex == -1) {
+			suffix = url[lastColonIndex:]
+		}
+
+		return suffix
+	}
+
 	c := createCollector()
 
 	c.OnResponse(func(r *colly.Response) {
-		fileName := strings.Split(r.Request.URL.Path, "/")
-		dir := "media/"
-		resName := fileName[len(fileName)-1]
-		utils.SaveFile(dir, processString(resName), r.Body)
+		atomic.AddInt32(&downloadedCount, 1)
+		reqUrl := r.Request.URL.String()
+		fileName := strings.Split(reqUrl, "/")
+		dir := userInfoCache.saveDir
+		lastPath := fileName[len(fileName)-1]
+		utils.SaveMediaFile(dir, strings.TrimSuffix(lastPath, extractSuffixAfterColon(lastPath)), r.Body)
+		logStore.AddURL(strings.TrimSuffix(reqUrl, extractSuffixAfterColon(reqUrl)))
 	})
 
+	retryCount := 0
 	c.OnError(func(r *colly.Response, err error) {
+		retryUrl := r.Request.URL.String()
 		log.Println("Request URL:", r.Request.URL, "failed with response:", r, "\nError:", err)
+		log.Panicln("Retry download media: ", retryUrl, "retry count: ", retryCount)
+		if retryCount < 3 {
+			c.Visit(retryUrl)
+			retryCount++
+		} else {
+			log.Println("Retry download media failed: ", retryUrl)
+		}
 	})
 
 	c.Visit(mediaUrls)
@@ -132,8 +158,6 @@ func getTwitterMediaUrl() string {
 
 	qureyParams := url.Values{}
 
-	fmt.Println("nextPageToken 2: ", userInfoCache.nextPageToken)
-
 	qureyParams.Add("variables", createVariables(userInfoCache.userId, userInfoCache.nextPageToken))
 	qureyParams.Add("features", createFeatures())
 	getTwitterMediaUrl := &url.URL{
@@ -145,21 +169,6 @@ func getTwitterMediaUrl() string {
 	return getTwitterMediaUrl.String()
 }
 
-func flattenArray(input gjson.Result) []string {
-	var result []string
-
-	input.ForEach(func(key, value gjson.Result) bool {
-		if value.IsArray() {
-			result = append(result, flattenArray(value)...)
-		} else {
-			result = append(result, value.String())
-		}
-		return true
-	})
-
-	return result
-}
-
 func extractNextPageTokenValue(json, keyword string) string {
 	var result string
 	gjson.Parse(json).ForEach(func(_, outer gjson.Result) bool {
@@ -168,14 +177,50 @@ func extractNextPageTokenValue(json, keyword string) string {
 			if strings.Contains(entryId, keyword) {
 				result = inner.Get("content.value").String()
 			}
-			return true // keep iterating
+			return true
 		})
-		return true // keep iterating
+		return true
 	})
 	return result
 }
 
+func processUrl(originUrl string, cachedUrls *int32) {
+	url := utils.TrimURLQueryAndHash(originUrl)
+	if logStore.URLExists(url) {
+		fmt.Println("media already downloaded: ", url)
+		atomic.AddInt32(cachedUrls, 1)
+		return
+	}
+
+	switch utils.FileType(url) {
+	case "image":
+		downloadMedia(url + ":orig")
+	case "audio", "video":
+		downloadMedia(url)
+	default:
+		fmt.Println("media type not supported: ", url)
+	}
+}
+
+func downloadMediaUrls(urls []string) bool {
+	var cachedUrls int32
+	var wg sync.WaitGroup
+
+	for _, url := range urls {
+		wg.Add(1)
+		go func(url string) {
+			defer wg.Done()
+			processUrl(url, &cachedUrls)
+		}(url)
+	}
+
+	wg.Wait()
+
+	return int(cachedUrls) == len(urls)
+}
+
 func getTwitterMedia() {
+	fmt.Println("download process: ", downloadedCount)
 	c := createCollector()
 
 	setHeaders := func(r *colly.Request) {
@@ -192,50 +237,67 @@ func getTwitterMedia() {
 
 	c.OnRequest(setHeaders)
 
-	extractMediaUrl := func(r *colly.Response) {
-		const tmp = "item.itemContent.tweet_results.result.legacy.extended_entities.media.#.media_url_https"
-		mediaUrls := gjson.Get(string(r.Body), "data.user.result.timeline_v2.timeline")
+	handleMediaInfoResp := func(r *colly.Response) {
 
-		extractUrls := func(path string) gjson.Result {
-			return gjson.Get(mediaUrls.String(), path)
+		processMediaInfo := func(jsonContentStr string) []utils.MediaInfo {
+			const prefixJsonPath = "data.user.result.timeline_v2.timeline."
+			const firstPageInfixJsonPath = "instructions.#.entries.#.content.items.#."
+			const infixJsonPath = "instructions.#.moduleItems.#."
+			const suffixJsonPath = "item.itemContent.tweet_results.result.legacy.extended_entities.media"
+
+			mediaListJsonRes := gjson.Get(jsonContentStr, prefixJsonPath+firstPageInfixJsonPath+suffixJsonPath)
+
+			flattenedSlice := utils.Flatten(mediaListJsonRes.Value())
+
+			arrayLikeString, _ := utils.SliceToJSONString(flattenedSlice)
+
+			mediaInfoList, _ := utils.ExtractMediaInfos(arrayLikeString)
+
+			if len(mediaInfoList) == 0 {
+				mediaListJsonRes = gjson.Get(jsonContentStr, prefixJsonPath+infixJsonPath+suffixJsonPath)
+				flattenedSlice = utils.Flatten(mediaListJsonRes.Value())
+				arrayLikeString, _ = utils.SliceToJSONString(flattenedSlice)
+				mediaInfoList, _ = utils.ExtractMediaInfos(arrayLikeString)
+			}
+
+			return mediaInfoList
 		}
 
-		imgUrls := extractUrls("instructions.#.entries.#.content.items.#." + tmp)
+		mediaInfoResList := processMediaInfo(string(r.Body))
 
-		tmpStr, _ := json.Marshal(flattenArray(imgUrls))
-
-		imgUrls = gjson.ParseBytes(tmpStr)
-
-		if len(imgUrls.Array()) == 0 || !imgUrls.Exists() {
-			fmt.Println("imgUrls is empty")
-			imgUrls = extractUrls("instructions.#.moduleItems.#." + tmp)
+		var flattenedArray []string
+		for _, mediaItem := range mediaInfoResList {
+			if mediaItem.IsVideo {
+				flattenedArray = append(flattenedArray, utils.FindMaxBitrateURL(mediaItem))
+			} else {
+				flattenedArray = append(flattenedArray, mediaItem.MediaURL)
+			}
 		}
 
-		getInfo := extractUrls("instructions.#.entries")
+		isPageDownloaded := downloadMediaUrls(flattenedArray)
 
-		userInfoCache.nextPageToken = extractNextPageTokenValue(getInfo.String(), "bottom")
-
-		fmt.Println("nextPageToken: ", userInfoCache.nextPageToken)
-
-		flattenedArray := flattenArray(imgUrls)
-		// fmt.Println("imgUrls: ", flattenedArray)
-
-		var wg sync.WaitGroup
-		for _, url := range flattenedArray {
-			wg.Add(1)
-			go func(url string) {
-				defer wg.Done()
-				downloadMedia(url + ":orig") // 添加原圖後綴，下載原圖
-			}(url)
+		if len(flattenedArray) == 0 || isPageDownloaded {
+			fmt.Println("no more media. task completed.")
+			logStore.SaveToFile("log.json")
+			userInfoCache = &userInfo{}
+			menu()
+			return
 		}
-		wg.Wait()
 
-		if len(imgUrls.Array()) == 0 {
-			fmt.Println("no more media")
-			os.Exit(0)
-		}
+		const prefixJsonPath = "data.user.result.timeline_v2.timeline."
+		const nextTokenJsonPath = "instructions.#.entries"
+
+		nextTokenJsonData := gjson.Get(string(r.Body), prefixJsonPath+nextTokenJsonPath)
+
+		userInfoCache.nextPageToken = extractNextPageTokenValue(nextTokenJsonData.String(), "bottom")
+
+		task.Add(1)
+		go func() {
+			defer task.Done()
+			getTwitterMedia()
+		}()
 	}
-	c.OnResponse(extractMediaUrl)
+	c.OnResponse(handleMediaInfoResp)
 
 	handleError := func(r *colly.Response, err error) {
 		log.Println("Request URL:", r.Request.URL, "failed with response:", r, "\nError:", err)
@@ -305,7 +367,13 @@ func getUserInfo() {
 		userInfoCache.followersCount = int(gjson.Get(result, "data.user.result.legacy.followers_count").Int())
 		userInfoCache.followingCount = int(gjson.Get(result, "data.user.result.legacy.friends_count").Int())
 		userInfoCache.tweetCount = int(gjson.Get(result, "data.user.result.legacy.media_count").Int())
-		getTwitterMedia()
+		printUserInfo()
+
+		task.Add(1)
+		go func() {
+			defer task.Done()
+			getTwitterMedia()
+		}()
 	})
 
 	c.OnError(func(r *colly.Response, err error) {
@@ -323,12 +391,11 @@ func printUserInfo() {
 	fmt.Println("followersCount: ", userInfoCache.followersCount)
 	fmt.Println("followingCount: ", userInfoCache.followingCount)
 	fmt.Println("tweetCount: ", userInfoCache.tweetCount)
-	fmt.Println("nextPageToken: ", userInfoCache.nextPageToken)
 }
 
 func menu() {
 	fmt.Println("1. Get user info")
-	fmt.Println("2. Get media")
+	fmt.Println("2. Get media from file")
 	fmt.Println("3. Print user info")
 	fmt.Println("4. Exit")
 
@@ -342,29 +409,54 @@ func menu() {
 		fmt.Println("Enter user name: ")
 		scanner.Scan()
 		userInfoCache.userName = scanner.Text()
+		userInfoCache.saveDir = scanner.Text() + "/"
 		getUserInfo()
 
-		ticker := time.NewTicker(5 * time.Second)
-
-		go func() {
-			for range ticker.C {
-				getUserInfo()
-			}
-		}()
-
 	case 2:
-		getTwitterMedia()
+
+		urls, err := utils.LoadURLsFromJSON("urls.json")
+		if err != nil {
+			log.Println("Error loading urls: ", err)
+		} else {
+			task.Add(1)
+			go func() {
+				defer task.Done()
+				downloadMediaUrls(urls)
+				menu()
+			}()
+		}
 
 	case 3:
 		fmt.Println("User info: ")
 		printUserInfo()
+
+	case 4:
+		task.Done()
 	default:
 		fmt.Println("Invalid choice")
+		menu()
 	}
 }
 
+func formatTimeToISODate(inputTime string) string {
+	twitterTimeLayout := "Mon Jan 2 15:04:05 -0700 2006"
+	isoDateLayout := "2006-01-02"
+	parsedTime, err := time.Parse(twitterTimeLayout, inputTime)
+	if err != nil {
+		log.Printf("Error parsing time: %v", err)
+		return ""
+	}
+	return parsedTime.Format(isoDateLayout)
+}
+
 func main() {
+
+	logStore.LoadFromFile("log.json")
+
+	fmt.Println(formatTimeToISODate("Mon Apr 20 01:00:00 +0000 2024"))
+
 	menu()
 
-	select {}
+	task.Add(1)
+	task.Wait()
 }
