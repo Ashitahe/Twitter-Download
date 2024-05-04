@@ -33,6 +33,10 @@
 
    ![cookie示例](https://img.outsider404.com/asuhe-blog-img/2024/05/46750ca579c1d92c37310ee9d07c932c.png)
 
+- 運行
+  在 release 裏下載 main.exe 程序，點擊運行。
+  你自己用源碼編譯也可以。
+
 - 使用用戶名進行下載
   菜單中選擇第一項，并輸入用戶名。
 
