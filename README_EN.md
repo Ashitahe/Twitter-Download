@@ -1,10 +1,14 @@
-[中文](./README.md) | English
+[中文](README.md) | English
 
 # Twitter Media Downloader
 
 Download all media files (images, videos, etc.) from a user's tweets using the username as a parameter.
 
 # Changelog
+
+- 2024-05-05
+
+  - Generate CSV record file
 
 - 2024-05-04
 
@@ -38,7 +42,7 @@ Create a `setting.json` file. Fill in the cookie.
 
 - Running
 
-Download the main.exe program from the release, and click to run.
+Download the `main.exe` program from the release, and click to run.
 You can also compile from the source code yourself.
 
 - Download using a username

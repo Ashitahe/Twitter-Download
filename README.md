@@ -1,10 +1,14 @@
-中文 | [English](./README_EN.md)
+中文 | [English](README_EN.md)
 
 # 推特媒體下載器
 
 以用戶名為參數，下載用戶所有的推文的媒體文件（圖片、視頻）等
 
 # 變更日志
+
+- 2024-05-05
+
+  - 生成 csv 記錄文件
 
 - 2024-05-04
 
@@ -17,7 +21,7 @@
 
 - 配置
 
-創建一個 setting.json 文件。填入 cookie。
+創建一個 `setting.json` 文件。填入 cookie。
 
 ```json
 {
@@ -36,7 +40,7 @@
 
 - 運行
 
-在 release 裏下載 main.exe 程序，點擊運行。
+在 release 裏下載 `main.exe` 程序，點擊運行。
 你自己用源碼編譯也可以。
 
 - 使用用戶名進行下載
