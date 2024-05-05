@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/gocolly/colly"
 	"github.com/tidwall/gjson"
@@ -30,22 +29,13 @@ type userInfo struct {
 }
 
 var (
-	task            sync.WaitGroup
-	userInfoCache   = &userInfo{}
-	downloadedCount int32
-	logStore        = store.NewURLStore()
+	task              sync.WaitGroup
+	userInfoCache     = &userInfo{}
+	downloadedCount   int32
+	logStore          = store.NewURLStore()
+	settingsConfig, _ = utils.ReadSettings()
+	csvList           = []utils.CSV{}
 )
-
-func extractValueFromCookie(cookie string, fieldName string) string {
-	parts := strings.Split(cookie, ";")
-	for _, part := range parts {
-		pair := strings.Split(strings.TrimSpace(part), "=")
-		if pair[0] == fieldName {
-			return pair[1]
-		}
-	}
-	return ""
-}
 
 func createCollector() *colly.Collector {
 	c := colly.NewCollector(colly.Async(true))
@@ -219,31 +209,30 @@ func downloadMediaUrls(urls []string) bool {
 	return int(cachedUrls) == len(urls)
 }
 
+func setHeaders(r *colly.Request) {
+	cookie := settingsConfig["cookie"].(string)
+	const fieldName = "ct0"
+	token := utils.ExtractValueFromCookie(cookie, fieldName)
+	r.Headers.Set("X-Csrf-Token", token)
+	r.Headers.Set("Cookie", cookie)
+	r.Headers.Set("Content-Type", "application/json")
+	r.Headers.Set("Accept", "*/*")
+	r.Headers.Set("Authorization", "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA")
+}
+
 func getTwitterMedia() {
 	fmt.Println("download process: ", downloadedCount)
 	c := createCollector()
-
-	setHeaders := func(r *colly.Request) {
-		settings, _ := utils.ReadSettings()
-		cookie := settings["cookie"].(string)
-		const fieldName = "ct0"
-		token := extractValueFromCookie(cookie, fieldName)
-		r.Headers.Set("X-Csrf-Token", token)
-		r.Headers.Set("Cookie", cookie)
-		r.Headers.Set("Content-Type", "application/json")
-		r.Headers.Set("Accept", "*/*")
-		r.Headers.Set("Authorization", "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA")
-	}
 
 	c.OnRequest(setHeaders)
 
 	handleMediaInfoResp := func(r *colly.Response) {
 
-		processMediaInfo := func(jsonContentStr string) []utils.MediaInfo {
+		processMediaInfo := func(jsonContentStr string) []utils.Legacy {
 			const prefixJsonPath = "data.user.result.timeline_v2.timeline."
 			const firstPageInfixJsonPath = "instructions.#.entries.#.content.items.#."
 			const infixJsonPath = "instructions.#.moduleItems.#."
-			const suffixJsonPath = "item.itemContent.tweet_results.result.legacy.extended_entities.media"
+			const suffixJsonPath = "item.itemContent.tweet_results.result.legacy"
 
 			mediaListJsonRes := gjson.Get(jsonContentStr, prefixJsonPath+firstPageInfixJsonPath+suffixJsonPath)
 
@@ -251,26 +240,44 @@ func getTwitterMedia() {
 
 			arrayLikeString, _ := utils.SliceToJSONString(flattenedSlice)
 
-			mediaInfoList, _ := utils.ExtractMediaInfos(arrayLikeString)
+			mediaInfoList, _ := utils.ExtractMedias(arrayLikeString)
 
 			if len(mediaInfoList) == 0 {
 				mediaListJsonRes = gjson.Get(jsonContentStr, prefixJsonPath+infixJsonPath+suffixJsonPath)
 				flattenedSlice = utils.Flatten(mediaListJsonRes.Value())
 				arrayLikeString, _ = utils.SliceToJSONString(flattenedSlice)
-				mediaInfoList, _ = utils.ExtractMediaInfos(arrayLikeString)
 			}
 
-			return mediaInfoList
+			legacys, _ := utils.ExtractLegacys(arrayLikeString)
+
+			return legacys
 		}
 
-		mediaInfoResList := processMediaInfo(string(r.Body))
+		legacyList := processMediaInfo(string(r.Body))
 
 		var flattenedArray []string
-		for _, mediaItem := range mediaInfoResList {
-			if mediaItem.IsVideo {
-				flattenedArray = append(flattenedArray, utils.FindMaxBitrateURL(mediaItem))
-			} else {
-				flattenedArray = append(flattenedArray, mediaItem.MediaURL)
+		for _, legacyItm := range legacyList {
+
+			log.Printf("Created at: %s\n", utils.ParseTwitterTime(legacyItm.CreatedAt))
+
+			for _, media := range legacyItm.Extended.Media {
+
+				csvList = append(csvList, utils.CSV{
+					TweetDate:   utils.ParseTwitterTime(legacyItm.CreatedAt),
+					TweetId:     legacyItm.TweetID,
+					Username:    "@" + userInfoCache.userName,
+					DisplayName: userInfoCache.displayName,
+					TweetText:   legacyItm.TweetText,
+					TweetURL:    media.ExpandedUrl,
+					MediaType:   media.Type,
+					MediaURL:    media.MediaURL,
+				})
+
+				if media.IsVideo {
+					flattenedArray = append(flattenedArray, utils.FindMaxBitrateURL(media))
+				} else {
+					flattenedArray = append(flattenedArray, media.MediaURL)
+				}
 			}
 		}
 
@@ -279,7 +286,9 @@ func getTwitterMedia() {
 		if len(flattenedArray) == 0 || isPageDownloaded {
 			fmt.Println("no more media. task completed.")
 			logStore.SaveToFile("log.json")
+			utils.SaveToCSV(csvList, "record.csv")
 			userInfoCache = &userInfo{}
+			csvList = []utils.CSV{}
 			menu()
 			return
 		}
@@ -347,17 +356,7 @@ func getTwitterUserInfoUrl() string {
 func getUserInfo() {
 	c := createCollector()
 
-	c.OnRequest(func(r *colly.Request) {
-		settings, _ := utils.ReadSettings()
-		cookie := settings["cookie"].(string)
-		const fieldName = "ct0"
-		token := extractValueFromCookie(cookie, fieldName)
-		r.Headers.Set("X-Csrf-Token", token)
-		r.Headers.Set("Cookie", cookie)
-		r.Headers.Set("Content-Type", "application/json")
-		r.Headers.Set("Accept", "*/*")
-		r.Headers.Set("Authorization", "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA")
-	})
+	c.OnRequest(setHeaders)
 
 	c.OnResponse(func(r *colly.Response) {
 		result := string(r.Body)
@@ -438,22 +437,9 @@ func menu() {
 	}
 }
 
-func formatTimeToISODate(inputTime string) string {
-	twitterTimeLayout := "Mon Jan 2 15:04:05 -0700 2006"
-	isoDateLayout := "2006-01-02"
-	parsedTime, err := time.Parse(twitterTimeLayout, inputTime)
-	if err != nil {
-		log.Printf("Error parsing time: %v", err)
-		return ""
-	}
-	return parsedTime.Format(isoDateLayout)
-}
-
 func main() {
 
 	logStore.LoadFromFile("log.json")
-
-	fmt.Println(formatTimeToISODate("Mon Apr 20 01:00:00 +0000 2024"))
 
 	menu()
 

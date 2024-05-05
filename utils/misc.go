@@ -2,7 +2,9 @@ package utils
 
 import (
 	"encoding/json"
+	"log"
 	"strings"
+	"time"
 )
 
 type Variant struct {
@@ -17,8 +19,8 @@ type VideoInfo struct {
 	Variants       []Variant
 }
 
-// MediaInfo 结构体用于存储视频信息，包括一个额外的布尔值标识是否为视频
-type MediaInfo struct {
+// Media 结构体用于存储视频信息，包括一个额外的布尔值标识是否为视频
+type Media struct {
 	Type        string    `json:"type"`
 	ExpandedUrl string    `json:"expanded_url"`
 	MediaURL    string    `json:"media_url_https,omitempty"` // 使用omitempty标签，当字段为空时不输出到JSON
@@ -26,9 +28,20 @@ type MediaInfo struct {
 	VideoInfo   VideoInfo `json:"video_info,omitempty"`
 }
 
-// ExtractMediaInfos 从JSON数组字符串中提取视频信息
-func ExtractMediaInfos(jsonArrayStr string) ([]MediaInfo, error) {
-	var mediaInfos []MediaInfo
+type Extended struct {
+	Media []Media `json:"media"`
+}
+
+type Legacy struct {
+	CreatedAt string   `json:"created_at,omitempty"` // 使用omitempty标签，当字段为空时不输出到JSON
+	Extended  Extended `json:"extended_entities"`
+	TweetID   string   `json:"id_str"`
+	TweetText string   `json:"full_text"`
+}
+
+// ExtractMedias 从JSON数组字符串中提取视频信息
+func ExtractMedias(jsonArrayStr string) ([]Media, error) {
+	var mediaInfos []Media
 	err := json.Unmarshal([]byte(jsonArrayStr), &mediaInfos)
 	if err != nil {
 		return nil, err
@@ -42,8 +55,19 @@ func ExtractMediaInfos(jsonArrayStr string) ([]MediaInfo, error) {
 	return mediaInfos, nil
 }
 
+// ExtractLegacys 从JSON数组字符串中提取Legacy对象List
+func ExtractLegacys(jsonArrayStr string) ([]Legacy, error) {
+	var legacys []Legacy
+	err := json.Unmarshal([]byte(jsonArrayStr), &legacys)
+	if err != nil {
+		return nil, err
+	}
+
+	return legacys, nil
+}
+
 // FindMaxBitrateURL 遍历variants数组，找到bitrate最大的元素并返回其URL
-func FindMaxBitrateURL(mediaInfo MediaInfo) string {
+func FindMaxBitrateURL(mediaInfo Media) string {
 	maxBitrate := 0
 	maxBitrateURL := ""
 
@@ -57,7 +81,7 @@ func FindMaxBitrateURL(mediaInfo MediaInfo) string {
 	return maxBitrateURL
 }
 
-// flatten 接受一个任意深度嵌套的切片，并返回一个扁平化的切片
+// Flatten 接受一个任意深度嵌套的切片，并返回一个扁平化的切片
 func Flatten(input interface{}) []interface{} {
 	// 初始化结果切片，不预分配容量以避免过度分配
 	var result []interface{}
@@ -84,7 +108,7 @@ func Flatten(input interface{}) []interface{} {
 	return result
 }
 
-// sliceToJSONString 将一个 []interface{} 类型的切片转换为一个类似数组的JSON字符串
+// SliceToJSONString 将一个 []interface{} 类型的切片转换为一个类似数组的JSON字符串
 func SliceToJSONString(slice []interface{}) (string, error) {
 	// 预估结果字符串的大小，这里假设每个元素转换后平均长度为1024字节
 	estimatedSize := len(slice) * 1024
@@ -137,4 +161,28 @@ func TrimURLQueryAndHash(url string) string {
 
 	// 如果找到了哈希，但没有找到查询参数，或者哈希在查询参数之前出现
 	return url[:hashStart]
+}
+
+// ParseTwitterTime 将Twitter时间格式转换为ISO日期格式
+func ParseTwitterTime(inputTime string) string {
+	twitterTimeLayout := "Mon Jan 2 15:04:05 -0700 2006"
+	isoDateLayout := "2006-01-02"
+	parsedTime, err := time.Parse(twitterTimeLayout, inputTime)
+	if err != nil {
+		log.Printf("Error parsing time: %v", err)
+		return ""
+	}
+	return parsedTime.Format(isoDateLayout)
+}
+
+// ExtractValueFromCookie 从cookie字符串中提取指定字段的值
+func ExtractValueFromCookie(cookie string, fieldName string) string {
+	parts := strings.Split(cookie, ";")
+	for _, part := range parts {
+		pair := strings.Split(strings.TrimSpace(part), "=")
+		if pair[0] == fieldName {
+			return pair[1]
+		}
+	}
+	return ""
 }
