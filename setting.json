@@ -1,8 +1,6 @@
 {
   "cookie": "",
   "cookieComment": "上面cookie字段填入你的cookie，保證cookie有效，否則將無法正常使用",
-  "savePath": "D:\\Twitter\\",
-  "savePathComment": "保存路径，必须填写，否则默認保存到程序目录下的文件夹",
   "userList": [
     "Twitter",
     "TwitterSupport"

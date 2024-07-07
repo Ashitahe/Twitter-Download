@@ -55,15 +55,15 @@ func ExtractMedias(jsonArrayStr string) ([]Media, error) {
 	return mediaInfos, nil
 }
 
-// ExtractLegacys 从JSON数组字符串中提取Legacy对象List
-func ExtractLegacys(jsonArrayStr string) ([]Legacy, error) {
-	var legacys []Legacy
-	err := json.Unmarshal([]byte(jsonArrayStr), &legacys)
+// ExtractLegacyList 从JSON数组字符串中提取Legacy对象List
+func ExtractLegacyList(jsonArrayStr string) ([]Legacy, error) {
+	var legacyList []Legacy
+	err := json.Unmarshal([]byte(jsonArrayStr), &legacyList)
 	if err != nil {
 		return nil, err
 	}
 
-	return legacys, nil
+	return legacyList, nil
 }
 
 // FindMaxBitrateURL 遍历variants数组，找到bitrate最大的元素并返回其URL

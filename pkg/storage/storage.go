@@ -1,4 +1,4 @@
-package store
+package storage
 
 import (
 	"encoding/json"
@@ -6,23 +6,24 @@ import (
 	"os"
 )
 
-// URLStorer defines the interface for URL storage operations
-type URLStorer interface {
+// URLStorage defines the interface for URL storage operations
+type URLStorage interface {
 	AddURL(url string)
 	URLExists(url string) bool
 	RemoveURL(url string) error
-	SaveToFile(filename string) error
-	LoadFromFile(filename string) error
+	SaveToFile() error
+	LoadFromFile() error
 }
 
 // URLStore holds the downloaded URLs
 type URLStore struct {
+	URLStoreFilePath string
 	URLs map[string]bool
 }
 
 // NewURLStore creates a new URLStore
-func NewURLStore() *URLStore {
-	return &URLStore{URLs: make(map[string]bool)}
+func NewURLStore(storeFileName string) *URLStore {
+	return &URLStore{ URLStoreFilePath: storeFileName, URLs: make(map[string]bool)}
 }
 
 // AddURL adds a URL to the store
@@ -46,17 +47,17 @@ func (s *URLStore) RemoveURL(url string) error {
 }
 
 // SaveToFile saves the URL store to a file
-func (s *URLStore) SaveToFile(filename string) error {
+func (s *URLStore) SaveToFile() error {
 	data, err := json.Marshal(s.URLs)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filename, data, 0644)
+	return os.WriteFile(s.URLStoreFilePath, data, 0644)
 }
 
 // LoadFromFile loads the URL store from a file
-func (s *URLStore) LoadFromFile(filename string) error {
-	data, err := os.ReadFile(filename)
+func (s *URLStore) LoadFromFile() error {
+	data, err := os.ReadFile(s.URLStoreFilePath)
 	if err != nil {
 		return err
 	}
